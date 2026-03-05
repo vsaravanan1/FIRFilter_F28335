@@ -3,7 +3,8 @@
 //
 #include <stdio.h>
 #include <stdint.h>
-
+#include <stdbool.h>
+#include <math.h>
 #include "fpu_types.h"   // MUST come before fpu_filter.h
 
 #include "DSP28x_Project.h"
@@ -12,6 +13,14 @@
 
 #define BUF_SIZE 100
 #define FIR_OUTPUT_BUF_SIZE 512
+
+//macros for max and min
+#define max(a, b) (((a > b) ? (a) : (b)))
+#define min(a, b) (((a < b) ? (a) : (b)))
+
+//epwm3
+double rms_double = 1.0;
+uint16_t cca_value = 50;
 
 
 // dma and adc pointers (arrays)
@@ -24,15 +33,14 @@ uint16_t ADC_BUF_2[BUF_SIZE] = {};
 
 //fir
 uint16_t fir_output_buf_idx = 0;
-uint16_t fir_output_buf[FIR_OUTPUT_BUF_SIZE];
+float fir_output_buf[FIR_OUTPUT_BUF_SIZE];
 float alpha = 0.0002;
-float mean_sq = 0;
+float mean_sq = 0.0;
 float V_sq = 0;
 
 
 //RMS value
 uint64_t NUM_SAMPLES = 1;
-
 
 //
 // Function Prototypes
@@ -40,6 +48,7 @@ uint64_t NUM_SAMPLES = 1;
 __interrupt void cpu_timer0_isr(void);
 __interrupt void dintch1_isr(void);
 __interrupt void dintch2_isr(void);
+__interrupt void epwm2_isr(void);
 
 
 
@@ -66,6 +75,7 @@ void main(void)
 
     InitSysCtrl();
     InitGpio();
+
 
     // Clear all interrupts and initialize PIE vector table:
     // Disable CPU interrupts
@@ -100,6 +110,7 @@ void main(void)
     PieVectTable.TINT0 = &cpu_timer0_isr;
     PieVectTable.DINTCH1 = &dintch1_isr;
     PieVectTable.DINTCH2 = &dintch2_isr;
+    PieVectTable.EPWM2_INT = &epwm2_isr;
     EDIS;    // This is needed to disable write to EALLOW protected registers
 
 
@@ -196,8 +207,7 @@ void main(void)
 
     init_epwm();
     configure_fir();
-
-    DMAInitialize();
+    configure_dma();
 
     int j;
     for (j = 0; j < BUF_SIZE; j++) {
@@ -211,6 +221,7 @@ void main(void)
     //
     IER |= M_INT1;
     IER |= M_INT7;
+    IER |= M_INT3;
 
     //
     // Enable TINT0 in the PIE: Group 1 interrupt 7
@@ -218,6 +229,7 @@ void main(void)
     PieCtrlRegs.PIEIER1.bit.INTx7 = 1;
     PieCtrlRegs.PIEIER7.bit.INTx1 = 1;
     PieCtrlRegs.PIEIER7.bit.INTx2 = 1;
+    PieCtrlRegs.PIEIER3.bit.INTx2 = 1;
 
 
     //
@@ -236,8 +248,8 @@ void main(void)
             while(!(SciaRegs.SCICTL2.bit.TXRDY));
             SciaRegs.SCITXBUF = '\n';
             while(!(SciaRegs.SCICTL2.bit.TXRDY));
-            ch1_write = 0;
             filter_data(1);
+            ch1_write = 0;
         }
 
         if (ch2_write == 1) {
@@ -245,11 +257,15 @@ void main(void)
             while(!(SciaRegs.SCICTL2.bit.TXRDY));
             SciaRegs.SCITXBUF = '\n';
             while(!(SciaRegs.SCICTL2.bit.TXRDY));
-            ch2_write = 0;
             filter_data(2);
+            ch2_write = 0;
         }
 
     }
+
+    EALLOW;
+        SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
+    EDIS;
 }
 
 //
@@ -257,6 +273,13 @@ void main(void)
 //
 
 void init_epwm(void) {
+    //gpio config for EPWM3
+    EALLOW;
+        GpioCtrlRegs.GPAMUX1.bit.GPIO4 = 1;
+        GpioCtrlRegs.GPAPUD.bit.GPIO4 = 1;
+    EDIS;
+
+
     EALLOW;
     EPwm1Regs.TBPRD = 29;
     EPwm1Regs.TBCTL.bit.CTRMODE = 0;
@@ -266,10 +289,28 @@ void init_epwm(void) {
     EPwm1Regs.ETSEL.bit.SOCAEN = 1;
     EPwm1Regs.ETSEL.bit.SOCASEL = 0b010;
     EPwm1Regs.ETPS.bit.SOCAPRD = 1;
+
+    EPwm2Regs.TBPRD = 11719;
+    EPwm2Regs.TBCTL.bit.CTRMODE = 0;
+    EPwm2Regs.TBCTL.bit.HSPCLKDIV = 0b101;
+    EPwm2Regs.TBCTL.bit.CLKDIV = 0b100;
+    EPwm2Regs.ETSEL.bit.INTEN = 1;
+    EPwm2Regs.ETSEL.bit.INTSEL = 0b010;
+    EPwm2Regs.ETPS.bit.INTPRD = 0b01;
+
+
+    EPwm3Regs.TBPRD = 30000;
+    EPwm3Regs.TBCTL.bit.CTRMODE = 0;
+    EPwm3Regs.TBCTL.bit.HSPCLKDIV = 0b101;
+    EPwm3Regs.TBCTL.bit.CLKDIV = 0b010;
+    EPwm3Regs.CMPA.half.CMPA = 15000;
+    EPwm3Regs.AQCTLA.bit.CAU = 0b10;
+    EPwm3Regs.AQCTLA.bit.ZRO = 0b01;
+
     EDIS;
 }
 
-void configue_fir(void) {
+void configure_fir(void) {
     FIR_f32_setCoefficientsPtr(fir_handle, coeffs);
     FIR_f32_setDelayLinePtr(fir_handle, delay_line_buffer);
     FIR_f32_setCalcFunction(fir_handle, FIR_f32_calc);
@@ -334,7 +375,7 @@ void filter_data(int buf_num) {
 
     if (buf_num == 1) {
         for (int i = 0; i < BUF_SIZE; i++) {
-            fir_handle->input = ADC_BUF_1[i];
+            fir_handle->input = (float)ADC_BUF_1[i];
             fir_handle->calc(fir_handle);
             fir_output_buf[fir_output_buf_idx] = fir_handle->output;
             fir_output_buf_idx++;
@@ -372,6 +413,24 @@ dintch2_isr(void)
    PieCtrlRegs.PIEACK.all = PIEACK_GROUP7;
    ch2_write = 1;
    StartDMACH1();
+}
+
+
+__interrupt void
+epwm2_isr(void)
+{
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;
+    rms_double = sqrt(mean_sq);
+    double duty_ratio = rms_double/(4096.0);
+    duty_ratio = min(max(duty_ratio, 0.0), 1.0);
+    cca_value = (uint16_t)(30000.0 * (1 - duty_ratio));
+    cca_value = min(max(cca_value, 0), 30000);
+
+    EALLOW;
+    EPwm3Regs.CMPA.half.CMPA = cca_value;
+    EDIS;
+
+    EPwm2Regs.ETCLR.bit.INT = 1;
 }
 
 
