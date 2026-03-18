@@ -24,7 +24,7 @@ C:/ti/c2000/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_Gp
 C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_PieCtrl.c \
 C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_PieVect.c \
 C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_SysCtrl.c \
-../Example_2833xLEDBlink.c 
+../lowpass_filter_rms.c 
 
 C_DEPS += \
 ./DSP2833x_Adc.d \
@@ -36,7 +36,7 @@ C_DEPS += \
 ./DSP2833x_PieCtrl.d \
 ./DSP2833x_PieVect.d \
 ./DSP2833x_SysCtrl.d \
-./Example_2833xLEDBlink.d 
+./lowpass_filter_rms.d 
 
 OBJS += \
 ./DSP2833x_ADC_cal.obj \
@@ -51,7 +51,7 @@ OBJS += \
 ./DSP2833x_PieVect.obj \
 ./DSP2833x_SysCtrl.obj \
 ./DSP2833x_usDelay.obj \
-./Example_2833xLEDBlink.obj 
+./lowpass_filter_rms.obj 
 
 ASM_DEPS += \
 ./DSP2833x_ADC_cal.d \
@@ -71,7 +71,7 @@ OBJS__QUOTED += \
 "DSP2833x_PieVect.obj" \
 "DSP2833x_SysCtrl.obj" \
 "DSP2833x_usDelay.obj" \
-"Example_2833xLEDBlink.obj" 
+"lowpass_filter_rms.obj" 
 
 C_DEPS__QUOTED += \
 "DSP2833x_Adc.d" \
@@ -83,7 +83,7 @@ C_DEPS__QUOTED += \
 "DSP2833x_PieCtrl.d" \
 "DSP2833x_PieVect.d" \
 "DSP2833x_SysCtrl.d" \
-"Example_2833xLEDBlink.d" 
+"lowpass_filter_rms.d" 
 
 ASM_DEPS__QUOTED += \
 "DSP2833x_ADC_cal.d" \
@@ -105,6 +105,6 @@ C_SRCS__QUOTED += \
 "C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_PieCtrl.c" \
 "C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_PieVect.c" \
 "C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/source/DSP2833x_SysCtrl.c" \
-"../Example_2833xLEDBlink.c" 
+"../lowpass_filter_rms.c" 
 
 

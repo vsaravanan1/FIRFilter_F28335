@@ -12,7 +12,7 @@
 "./DSP2833x_PieVect.obj"
 "./DSP2833x_SysCtrl.obj"
 "./DSP2833x_usDelay.obj"
-"./Example_2833xLEDBlink.obj"
+"./lowpass_filter_rms.obj"
 "C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/common/cmd/28335_RAM_lnk.cmd"
 "C:/ti/C2000Ware_6_00_01_00/device_support/f2833x/headers/cmd/DSP2833x_Headers_nonBIOS.cmd"
 -lIQmath_fpu32.lib

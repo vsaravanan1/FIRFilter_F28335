@@ -5,14 +5,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
-#include "fpu_types.h"   // MUST come before fpu_filter.h
+#include "fpu_types.h"
 
 #include "DSP28x_Project.h"
 #include "fpu_filter.h"
-#include "fir_filter.h"  // Your data file
+#include "fir_filter.h"
 
-#define BUF_SIZE 100
-#define FIR_OUTPUT_BUF_SIZE 512
+#define BUF_SIZE 220
+#define FIR_OUTPUT_BUF_SIZE 1024
+#pragma DATA_ALIGN(delay_line_buffer, 64);
 
 //macros for max and min
 #define max(a, b) (((a > b) ? (a) : (b)))
@@ -28,8 +29,10 @@ volatile uint16_t* DMADestCh1 = NULL;
 volatile uint16_t* DMASource = NULL;
 volatile uint16_t* DMADestCh2 = NULL;
 volatile uint16_t* DMADestCh3 = NULL;
-uint16_t ADC_BUF_1[BUF_SIZE] = {};
-uint16_t ADC_BUF_2[BUF_SIZE] = {};
+uint16_t ADC_BUF[2*BUF_SIZE];
+uint16_t* first_half = ADC_BUF;
+uint16_t* second_half = &ADC_BUF[BUF_SIZE];
+//bool capture_done = false;
 
 //fir
 uint16_t fir_output_buf_idx = 0;
@@ -57,6 +60,7 @@ void sci_init(void);
 void configure_fir(void);
 void configure_dma(void);
 void filter_data(int buf_num);
+void spi_init(void);
 
 
 unsigned short ch1_write = 0;
@@ -196,7 +200,7 @@ void main(void)
 
     // configure ADC
     AdcRegs.ADCTRL2.bit.RST_SEQ1 = 1;
-    AdcRegs.ADCTRL1.bit.ACQ_PS = 0x00;
+    AdcRegs.ADCTRL1.bit.ACQ_PS = 0x0;
     AdcRegs.ADCTRL3.bit.ADCCLKPS = 0x00;
     AdcRegs.ADCTRL1.bit.SEQ_CASC = 0;
     AdcRegs.ADCTRL2.bit.EPWM_SOCA_SEQ1 = 1;
@@ -209,10 +213,9 @@ void main(void)
     configure_fir();
     configure_dma();
 
-    int j;
-    for (j = 0; j < BUF_SIZE; j++) {
-        ADC_BUF_1[j] = 0;
-        ADC_BUF_2[j] = 0;
+
+    for (int j = 0; j < 2 * BUF_SIZE; j++) {
+        ADC_BUF[j] = 0;
     }
 
 
@@ -239,33 +242,26 @@ void main(void)
     ERTM;           // Enable Global realtime interrupt DBGM
 
 
+    EALLOW;
+        SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
+    EDIS;
+
     //
     // Loop (does fir filter processing)
     //
     for(;;) {
         if (ch1_write == 1) {
-            SciaRegs.SCITXBUF = 'a';
-            while(!(SciaRegs.SCICTL2.bit.TXRDY));
-            SciaRegs.SCITXBUF = '\n';
-            while(!(SciaRegs.SCICTL2.bit.TXRDY));
             filter_data(1);
             ch1_write = 0;
         }
 
         if (ch2_write == 1) {
-            SciaRegs.SCITXBUF = 'b';
-            while(!(SciaRegs.SCICTL2.bit.TXRDY));
-            SciaRegs.SCITXBUF = '\n';
-            while(!(SciaRegs.SCICTL2.bit.TXRDY));
             filter_data(2);
             ch2_write = 0;
         }
 
     }
 
-    EALLOW;
-        SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
-    EDIS;
 }
 
 //
@@ -290,7 +286,7 @@ void init_epwm(void) {
     EPwm1Regs.ETSEL.bit.SOCASEL = 0b010;
     EPwm1Regs.ETPS.bit.SOCAPRD = 1;
 
-    EPwm2Regs.TBPRD = 11719;
+    EPwm2Regs.TBPRD = 5000;
     EPwm2Regs.TBCTL.bit.CTRMODE = 0;
     EPwm2Regs.TBCTL.bit.HSPCLKDIV = 0b101;
     EPwm2Regs.TBCTL.bit.CLKDIV = 0b100;
@@ -301,14 +297,16 @@ void init_epwm(void) {
 
     EPwm3Regs.TBPRD = 30000;
     EPwm3Regs.TBCTL.bit.CTRMODE = 0;
-    EPwm3Regs.TBCTL.bit.HSPCLKDIV = 0b101;
-    EPwm3Regs.TBCTL.bit.CLKDIV = 0b010;
     EPwm3Regs.CMPA.half.CMPA = 15000;
     EPwm3Regs.AQCTLA.bit.CAU = 0b10;
     EPwm3Regs.AQCTLA.bit.ZRO = 0b01;
+    EPwm3Regs.TBCTL.bit.HSPCLKDIV = 0b101;
+    EPwm3Regs.TBCTL.bit.CLKDIV = 0b010;
 
     EDIS;
 }
+
+
 
 void configure_fir(void) {
     FIR_f32_setCoefficientsPtr(fir_handle, coeffs);
@@ -343,10 +341,29 @@ void sci_init(void) {
 
 }
 
+void spi_init(void) {
+    EALLOW;
+        GpioCtrlRegs.GPAMUX2.bit.GPIO16 = 0b01;
+        GpioCtrlRegs.GPAMUX2.bit.GPIO17 = 0b01;
+        GpioCtrlRegs.GPAMUX2.bit.GPIO18 = 0b01;
+        GpioCtrlRegs.GPAMUX2.bit.GPIO19 = 0b01;
+    EDIS;
+
+    SpiaRegs.SPICCR.bit.SPISWRESET = 0;
+    SpiaRegs.SPICTL.bit.MASTER_SLAVE = 1;
+    SpiaRegs.SPICTL.bit.CLK_PHASE = 0;
+    SpiaRegs.SPICCR.bit.CLKPOLARITY = 0;
+    SpiaRegs.SPICCR.bit.SPICHAR = 12;
+    SpiaRegs.SPICCR.bit.SPISWRESET = 1;
+}
+
 
 void configure_dma(void) {
+    EALLOW;
+        SysCtrlRegs.PCLKCR3.bit.DMAENCLK = 1; // Enable DMA Clock
+    EDIS;
     // DMA channels 1 and 2 config (ping-pong ADC buffer, start channel 1 initially, then start ch2 in isr once ch1 ends)
-    DMADestCh1 = &ADC_BUF_1[0];
+    DMADestCh1 = first_half;
     DMASource = &AdcMirror.ADCRESULT0;
     DMACH1AddrConfig(DMADestCh1, DMASource);
     DMACH1BurstConfig(0,0,0);
@@ -356,7 +373,7 @@ void configure_dma(void) {
                         OVRFLOW_DISABLE,SIXTEEN_BIT,CHINT_END,CHINT_ENABLE);
     StartDMACH1();
 
-    DMADestCh2 = &ADC_BUF_2[0];
+    DMADestCh2 = second_half;
     DMASource = &AdcMirror.ADCRESULT0;
     DMACH2AddrConfig(DMADestCh2, DMASource);
     DMACH2BurstConfig(0,0,0);
@@ -369,16 +386,19 @@ void configure_dma(void) {
 }
 
 void filter_data(int buf_num) {
-    if (fir_output_buf_idx == FIR_OUTPUT_BUF_SIZE) {
-        fir_output_buf_idx = 0;
-    }
-
     if (buf_num == 1) {
         for (int i = 0; i < BUF_SIZE; i++) {
-            fir_handle->input = (float)ADC_BUF_1[i];
+            fir_handle->input = 3.0 * ((float)*(first_half+i))/4096.0f;
             fir_handle->calc(fir_handle);
-            fir_output_buf[fir_output_buf_idx] = fir_handle->output;
-            fir_output_buf_idx++;
+            //if (!capture_done) {
+                fir_output_buf[fir_output_buf_idx] = fir_handle->output;
+                fir_output_buf_idx++;
+                if (fir_output_buf_idx == FIR_OUTPUT_BUF_SIZE) {
+                    fir_output_buf_idx = 0;
+                //    capture_done = true;
+                }
+            //}
+
             V_sq = (fir_handle->output) * (fir_handle->output);
             mean_sq = alpha * (V_sq) + (1 - alpha) * (mean_sq);
         }
@@ -386,10 +406,18 @@ void filter_data(int buf_num) {
 
     else if (buf_num == 2) {
         for (int i = 0; i < BUF_SIZE; i++) {
-            fir_handle->input = ADC_BUF_2[i];
+            fir_handle->input = 3.0 * ((float)*(second_half+i))/4096.0f;
             fir_handle->calc(fir_handle);
-            fir_output_buf[fir_output_buf_idx] = fir_handle->output;
-            fir_output_buf_idx++;
+
+            //if (!capture_done) {
+                fir_output_buf[fir_output_buf_idx] = fir_handle->output;
+                fir_output_buf_idx++;
+                if (fir_output_buf_idx == FIR_OUTPUT_BUF_SIZE) {
+                     fir_output_buf_idx = 0;
+                //     capture_done = true;
+                }
+            //}
+
             V_sq = (fir_handle->output) * (fir_handle->output);
             mean_sq = alpha * (V_sq) + (1 - alpha) * (mean_sq);
         }
@@ -420,10 +448,7 @@ __interrupt void
 epwm2_isr(void)
 {
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;
-    rms_double = sqrt(mean_sq);
-    double duty_ratio = rms_double/(4096.0);
-    duty_ratio = min(max(duty_ratio, 0.0), 1.0);
-    cca_value = (uint16_t)(30000.0 * (1 - duty_ratio));
+    cca_value = (uint16_t)(30000.0f * (3.3 - sqrt(mean_sq))/3.3f);
     cca_value = min(max(cca_value, 0), 30000);
 
     EALLOW;
